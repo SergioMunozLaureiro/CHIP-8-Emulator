@@ -1,3 +1,6 @@
+
+use std::fs::File;
+use std::io::Read;
 const FONTS: [u8; 80] = [
     0xF0, 0x90, 0x90, 0x90, 0xF0,
     0x20, 0x60, 0x20, 0x20, 0x70,
@@ -41,6 +44,21 @@ impl Memory {
     pub fn write(&mut self, adress: u16, value: u8) {
         self.ram[adress as usize] = value;
     }
+
+    pub fn load_rom(&mut self, filename: &str) -> std::io::Result<()> { 
+    let mut file = File::open(filename)?;
+    let mut buffer = Vec::new();
+
+    file.read_to_end(&mut buffer)?;
+
+    for (i, &byte) in buffer.iter().enumerate() {
+        if 512 + i < 4096 {
+            self.ram[512 + i] = byte;
+        }
+    }
+
+    Ok(())
+}
 }
 
 #[cfg(test)]
