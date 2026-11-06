@@ -1,17 +1,40 @@
 mod memory;
 mod cpu;
+mod display;
 
 use memory::Memory;
 use cpu::CPU;
-use std::thread;
-use std::time::{Duration, Instant};
+use display::Display;
+
+use rodio::{OutputStream, Sink, source::SineWave, Source};
+use std::env;
 
 fn main() {
+    // 1. Capturar la ruta de la ROM desde los argumentos de la consola (o usar Pong por defecto)
+    let args: Vec<String> = env::args().collect();
+    let rom_path = if args.len() > 1 {
+        &args[1]
+    } else {
+        "c8games/pong.ch8"
+    };
+
+    // 2. Inicializar los componentes principales
     let mut memory = Memory::new();
     let mut cpu = CPU::new();
+    let mut display = Display::new();
 
-    // Cargamos la ROM desde tu nueva carpeta
-    let rom_path = "c8games/pong.ch8";
+    // 3. Inicializar el sistema de audio con rodio
+    let (_stream, stream_handle) = OutputStream::try_default().unwrap_or_else(|e| {
+        panic!("No se pudo detectar un dispositivo de salida de audio: {}", e);
+    });
+    let sink = Sink::try_new(&stream_handle).unwrap();
+
+    // Generamos un tono senoidal continuo de 440 Hz (Nota La / Beep estándar)
+    let tone = SineWave::new(440.0).repeat_infinite();
+    sink.append(tone);
+    sink.pause(); // Arrancamos en silencio
+
+    // 4. Cargar la ROM en memoria
     match memory.load_rom(rom_path) {
         Ok(_) => println!("¡ROM '{}' cargada con éxito!", rom_path),
         Err(e) => {
@@ -20,22 +43,25 @@ fn main() {
         }
     }
 
-    println!("¡Emulador Chip-8 encendido! Pulsa Ctrl+C para salir.");
+    println!("¡Emulador Chip-8 encendido! Cierra la ventana o pulsa ESC para salir.");
 
-    let mut ultimo_tick_temporizador = Instant::now();
-    let intervalo_temporizador = Duration::from_millis(16); // 60Hz
+    // 5. Bucle gráfico y de audio principal
+    while display.is_open() {
+        let keypad = display.get_keypad();
 
-    loop {
-        // 1. La CPU ejecuta una instrucción (va rápido)
-        cpu.tick(&mut memory);
-
-        // 2. Comprobamos el cronómetro de 60Hz
-        if ultimo_tick_temporizador.elapsed() >= intervalo_temporizador {
-            cpu.tick_timers(); // Actualiza los temporizadores
-            ultimo_tick_temporizador = Instant::now(); // Resetea el cronómetro
+        for _ in 0..10 {
+            cpu.tick(&mut memory, &mut display, &keypad);
         }
 
-        // 3. Pausa mínima para que el bucle no sature el 100% de tu ordenador moderno
-        thread::sleep(Duration::from_millis(2));
+        cpu.tick_timers();
+
+        // Control del zumbador según el temporizador de la CPU
+        if cpu.sound_timer > 0 {
+            sink.play();
+        } else {
+            sink.pause();
+        }
+
+        display.draw();
     }
 }

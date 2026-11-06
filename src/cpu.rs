@@ -1,5 +1,5 @@
 use crate::memory::Memory;
-
+use crate::display::{Display, WIDTH, HEIGHT};
 pub struct CPU {
     pub v: [u8; 16],
     pub i: u16,
@@ -49,7 +49,10 @@ impl CPU {
         opcode
     }
     // Esta función ejecutará un ciclo completo de la CPU
-pub fn tick(&mut self, memory: &mut crate::memory::Memory) {
+pub fn tick(&mut self, memory: &mut crate::memory::Memory,display: &mut Display,keypad: &[bool; 16]) {
+    if self.pc as usize >= 4094 {
+        return;
+    }
     // 1. FETCH: Leemos la instrucción de la memoria (pasamos la memoria prestada)
     let opcode = self.fetch(memory);
 
@@ -65,9 +68,10 @@ pub fn tick(&mut self, memory: &mut crate::memory::Memory) {
 
     // 3. EXECUTE: Buscamos qué instrucción coincide con nuestros recortes
     match (c, x, y, d) {
+        (0, 0, 0, 0) => {},
         // 00E0: Limpiar la pantalla
         (0, 0, 0xE, 0) => {
-            // TODO: pantalla.limpiar();
+            display.clear();
         }
 
         // 00EE: Return. Volver de una subrutina.
@@ -159,15 +163,55 @@ pub fn tick(&mut self, memory: &mut crate::memory::Memory) {
 
         // DXYN: Draw. Dibuja un sprite en pantalla
         (0xD, _, _, _) => {
-            // TODO: Lógica de dibujo en la matriz de la pantalla
+            let x_pos = (self.v[x] as usize) % WIDTH;
+            let y_pos = (self.v[y] as usize) % HEIGHT;
+            let height = d as usize;
+
+            // 1. Inicialmente no hay colisión (bandera VF = 0)
+            self.v[0xF] = 0;
+
+            // 2. Iteramos fila a fila (N bytes de alto)
+            for row in 0..height {
+                // Leemos el byte del sprite desde la memoria RAM en la dirección I + row
+                let sprite_byte = memory.read(self.i + row as u16);
+
+                // 3. Un byte contiene 8 píxeles (bits) horizontales
+                for col in 0..8 {
+                    // Extraemos el bit de la posición 'col' (de izquierda a derecha)
+                    let sprite_pixel = (sprite_byte >> (7 - col)) & 1;
+
+                    // Solo nos importan los bits encendidos (1)
+                    if sprite_pixel == 1 {
+                        let px = (x_pos + col) % WIDTH;
+                        let py = (y_pos + row) % HEIGHT;
+                        let index = py * WIDTH + px;
+
+                        // Si el píxel en pantalla ya estaba encendido (true), hay colisión
+                        if display.vram[index] {
+                            self.v[0xF] = 1;
+                        }
+
+                        // Operación XOR: Invertimos el estado del píxel
+                        display.vram[index] ^= true;
+                    }
+                }
+            }
         }
 
         // EX__: Operaciones de Teclado
-        (0xE, _, 9, 0xE) => { // EX9E: Skip si la tecla en Vx está pulsada
-            // TODO: if teclado[self.v[x]] { self.pc += 2; }
+        (0xE, _, 9, 0xE) => {
+            let key = self.v[x] as usize;
+            if key < 16 && keypad[key] {
+                self.pc += 2;
+            }
         },
-        (0xE, _, 0xA, 1) => { // EXA1: Skip si la tecla en Vx NO está pulsada
-            // TODO: if !teclado[self.v[x]] { self.pc += 2; }
+
+        // EXA1: Skip si la tecla con el valor guardado en Vx NO está pulsada
+        (0xE, _, 0xA, 1) => {
+            let key = self.v[x] as usize;
+            if key < 16 && !keypad[key] {
+                self.pc += 2;
+            }
         },
 
         // FX__: Operaciones de Memoria, Timers y Varios
@@ -177,9 +221,22 @@ pub fn tick(&mut self, memory: &mut crate::memory::Memory) {
             (0, 7) => self.v[x] = self.delay_timer,
             
             // FX0A: Esperar a que se pulse una tecla (bloquea la ejecución)
+            // FX0A: Esperar a que se pulse una tecla (Bloquea la CPU hasta recibir input)
             (0, 0xA) => {
-                // TODO: Bucle de espera o flag de pausa hasta recibir input
+                let mut pressed = false;
+                for i in 0..16 {
+                    if keypad[i] {
+                        self.v[x] = i as u8;
+                        pressed = true;
+                        break;
+                    }
+                }
+                // Si ninguna tecla fue pulsada, rebobinamos el PC 2 bytes para repetirlo en el siguiente ciclo
+                if !pressed {
+                    self.pc -= 2;
+                }
             },
+            
             
             // FX15: Delay Timer = Vx
             (1, 5) => self.delay_timer = self.v[x],
@@ -236,6 +293,7 @@ pub fn tick_timers(&mut self) {
         }
         self.sound_timer -= 1;
     }
+}
 }
 #[cfg(test)]
 mod tests {
